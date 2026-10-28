@@ -44,6 +44,18 @@ object BlocklistRepository {
         "api.surfeasy.com",
         "edge-cache.opera.com"
     )
+    // DOMINIOS CONDICIONALES: Solo se bloquean si el GPS está DENTRO de Trujillo o Pacasmayo
+    private val GEOFENCE_CONDITIONAL_DOMAINS: Set<String> = hashSetOf(
+        "youtube.com",
+        "youtu.be",
+        "googlevideo.com",
+        "ytimg.com",
+        "youtubei.googleapis.com",
+        "brave.com",
+        "search.brave.com",
+        "lens.google.com",
+        "lens.google"
+    )
 
     val BYPASS_IPS: Set<String> = hashSetOf(
         "1.1.1.1", "1.0.0.1",
@@ -55,6 +67,9 @@ object BlocklistRepository {
     @Volatile
     var isLoaded: Boolean = false
         private set
+
+    @Volatile
+    var isGeofenceRestricted: Boolean = false
 
     fun loadFromAssets(context: Context) {
         if (isLoaded) return
@@ -108,7 +123,15 @@ object BlocklistRepository {
             return true
         }
 
-        // 4. Lista negra masiva
+        // 4. Filtrado forzado si el dispositivo se encuentra DENTRO de la geocerca
+        // 4. Filtrado CONDICIONAL: Solo si el dispositivo está DENTRO de la geocerca
+        // Si estás fuera de Trujillo/Pacasmayo, isGeofenceRestricted es false y este bloque se omite
+        if (isGeofenceRestricted && matchesDomainOrSubdomain(normalized, GEOFENCE_CONDITIONAL_DOMAINS)) {
+            Log.w(TAG, "SINKHOLE CONDICIONAL: $normalized bloqueado por geocerca activa.")
+            return true
+        }
+
+        // 5. Lista negra masiva PERMANENTE (Los 11.000 dominios de assets/blocklist.txt)
         if (isLoaded && matchesDomainOrSubdomain(normalized, BLOCKED_DOMAINS)) {
             return true
         }

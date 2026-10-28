@@ -60,6 +60,9 @@ class LocalDnsBlockerService : VpnService() {
         createNotificationChannel()
         registerDefaultNetworkCallback()
         BlocklistRepository.loadFromAssets(applicationContext)
+
+        // Iniciar monitoreo activo de geocercas
+        LocationGeofenceEngine.startMonitoring(applicationContext)
     }
 
     private fun registerDefaultNetworkCallback() {
@@ -79,7 +82,7 @@ class LocalDnsBlockerService : VpnService() {
             startForeground(
                 NOTIFICATION_ID,
                 createNotification(),
-                ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE or ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION
             )
         } else {
             startForeground(NOTIFICATION_ID, createNotification())
@@ -238,6 +241,25 @@ class LocalDnsBlockerService : VpnService() {
     ) {
         val domain = extractQName(dnsPayload)
 
+        // 1. PRIORIDAD: Redirección DNS oficial de Google SafeSearch (forcesafesearch.google.com)
+        if (domain != null && SafeSearchRepository.isGoogleSearchDomain(domain)) {
+            val safeSearchResponse = SafeSearchRepository.createSafeSearchResponse(dnsPayload)
+            if (safeSearchResponse != null) {
+                Log.i(TAG, "SAFESEARCH ENFORCED: $domain -> 216.239.38.120 (forcesafesearch)")
+                val responsePacket = packetBuilder(safeSearchResponse)
+                synchronized(this) {
+                    try {
+                        outputStream?.write(responsePacket)
+                        outputStream?.flush()
+                    } catch (e: Exception) {
+                        Log.e(TAG, "Error escribiendo respuesta SafeSearch", e)
+                    }
+                }
+                return
+            }
+        }
+
+        // 2. Evaluación de Lista Negra (Sinkhole)
         if (domain != null && BlocklistRepository.isBlocked(domain)) {
             Log.i(TAG, "SINKHOLE BLOQUEADO: $domain -> NXDOMAIN")
             val responsePayload = createNxDomainResponse(dnsPayload)
@@ -480,6 +502,7 @@ class LocalDnsBlockerService : VpnService() {
     override fun onDestroy() {
         _isRunning.value = false
         serviceScope.cancel()
+        LocationGeofenceEngine.stopMonitoring()
         val cm = getSystemService(ConnectivityManager::class.java)
         try { cm?.unregisterNetworkCallback(networkCallback) } catch (_: Exception) {}
         try { vpnInterface?.close() } catch (_: Exception) {}

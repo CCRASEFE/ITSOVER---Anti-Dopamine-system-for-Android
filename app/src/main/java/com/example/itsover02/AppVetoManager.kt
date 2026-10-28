@@ -6,16 +6,26 @@ import android.app.admin.DevicePolicyManager
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
-import android.content.pm.PackageInstaller
 import android.os.Build
-import android.os.UserManager
 import android.util.Log
+import java.util.concurrent.ConcurrentHashMap
 
 object AppVetoManager {
 
     private const val TAG = "AppVetoManager"
 
     val BLOCKED_KEYWORDS = listOf("opera", "surfeasy", "tor browser")
+
+    val GEOFENCE_APPS = setOf(
+        "com.brave.browser",
+        "com.brave.browser_beta",
+        "com.brave.browser_nightly",
+        "com.google.android.youtube",
+        "com.google.ar.lens"
+    )
+
+    // Caché en memoria: guarda paquetes ya verificados como seguros para ahorrar 99% de CPU
+    private val verifiedSafePackages = ConcurrentHashMap.newKeySet<String>()
 
     fun scanAndVetoAll(context: Context, admin: ComponentName) {
         val dpm = context.getSystemService(Context.DEVICE_POLICY_SERVICE) as? DevicePolicyManager ?: return
@@ -25,28 +35,51 @@ object AppVetoManager {
         val packages = pm.getInstalledPackages(0)
 
         for (pkgInfo in packages) {
-            val pkgName = pkgInfo.packageName.lowercase()
+            val rawPkgName = pkgInfo.packageName
+            // Si el paquete ya fue auditado antes como seguro, lo saltamos en 0 nanosegundos
+            if (verifiedSafePackages.contains(rawPkgName) || rawPkgName == context.packageName) {
+                continue
+            }
 
-            // Validación segura de nulos para pkgInfo.applicationInfo
-            val appInfo = pkgInfo.applicationInfo
-            val appName = if (appInfo != null) {
-                try {
-                    pm.getApplicationLabel(appInfo).toString().lowercase()
-                } catch (e: Exception) {
-                    ""
+            val pkgName = rawPkgName.lowercase()
+
+            // 1. Comprobación rápida por nombre de paquete (sin tocar disco)
+            var isForbidden = BLOCKED_KEYWORDS.any { keyword -> pkgName.contains(keyword) }
+
+            // 2. Solo si no coincidió el paquete, leemos la etiqueta de la app una única vez en la vida
+            if (!isForbidden) {
+                val appInfo = pkgInfo.applicationInfo
+                if (appInfo != null) {
+                    val appName = try {
+                        pm.getApplicationLabel(appInfo).toString().lowercase()
+                    } catch (e: Exception) {
+                        ""
+                    }
+                    isForbidden = BLOCKED_KEYWORDS.any { keyword -> appName.contains(keyword) }
                 }
+            }
+
+            if (isForbidden) {
+                Log.w(TAG, "OBJETIVO DETECTADO: $rawPkgName. VETANDO...")
+                vetoPackage(context, admin, rawPkgName)
             } else {
-                ""
+                // Marcar como seguro en caché para no volver a gastar CPU en él
+                verifiedSafePackages.add(rawPkgName)
             }
+        }
+    }
 
-            val isForbidden = BLOCKED_KEYWORDS.any { keyword ->
-                pkgName.contains(keyword) || appName.contains(keyword)
-            }
+    fun setGeofenceAppsSuspended(context: Context, admin: ComponentName, suspend: Boolean) {
+        val dpm = context.getSystemService(Context.DEVICE_POLICY_SERVICE) as? DevicePolicyManager ?: return
+        if (!dpm.isDeviceOwnerApp(context.packageName)) return
 
-            if (isForbidden && pkgName != context.packageName) {
-                Log.w(TAG, "OBJETIVO DETECTADO EN POLLING: $pkgName ($appName). VETANDO...")
-                vetoPackage(context, admin, pkgInfo.packageName)
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+                dpm.setPackagesSuspended(admin, GEOFENCE_APPS.toTypedArray(), suspend)
+                Log.i(TAG, "Suspensión de apps en geocerca ($suspend) aplicada.")
             }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error modificando suspensión de apps por geocerca", e)
         }
     }
 
@@ -55,7 +88,6 @@ object AppVetoManager {
         val dpm = context.getSystemService(Context.DEVICE_POLICY_SERVICE) as? DevicePolicyManager ?: return
         if (!dpm.isDeviceOwnerApp(context.packageName)) return
 
-        // 1. Suspender
         try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
                 dpm.setPackagesSuspended(admin, arrayOf(packageName), true)
@@ -64,14 +96,12 @@ object AppVetoManager {
             Log.e(TAG, "Error suspendiendo $packageName", e)
         }
 
-        // 2. Ocultar
         try {
             dpm.setApplicationHidden(admin, packageName, true)
         } catch (e: Exception) {
             Log.e(TAG, "Error ocultando $packageName", e)
         }
 
-        // 3. Desinstalación silenciosa
         try {
             silentUninstall(context, packageName)
         } catch (e: Exception) {
@@ -92,6 +122,5 @@ object AppVetoManager {
         }
         val sender = PendingIntent.getBroadcast(context, 0, intent, flags).intentSender
         packageInstaller.uninstall(packageName, sender)
-        Log.w(TAG, "Orden de desinstalación desatendida ejecutada para: $packageName")
     }
 }

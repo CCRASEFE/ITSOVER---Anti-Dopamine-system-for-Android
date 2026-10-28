@@ -13,7 +13,14 @@ object MdmPolicyManager {
     private const val PKG_FIREFOX = "org.mozilla.firefox"
     private const val PKG_CHROME = "com.android.chrome"
 
-    // Paquetes de Opera para Android
+    // Paquetes del ecosistema Brave Browser
+    private val BRAVE_PACKAGES = arrayOf(
+        "com.brave.browser",
+        "com.brave.browser_beta",
+        "com.brave.browser_nightly"
+    )
+
+    // Paquetes de Opera
     private val OPERA_PACKAGES = arrayOf(
         "com.opera.browser",
         "com.opera.mini.native",
@@ -32,6 +39,7 @@ object MdmPolicyManager {
         applyChromeRestrictions(dpm, adminComponent)
         applyFirefoxRestrictions(dpm, adminComponent)
         applyOperaRestrictions(dpm, adminComponent)
+        applyBraveRestrictions(dpm, adminComponent)
     }
 
     private fun applyChromeRestrictions(dpm: DevicePolicyManager, admin: ComponentName) {
@@ -39,6 +47,8 @@ object MdmPolicyManager {
             val bundle = Bundle().apply {
                 putString("DnsOverHttpsMode", "off")
                 putInt("IncognitoModeAvailability", 1)
+                putBoolean("ForceGoogleSafeSearch", true)
+                putInt("ForceYouTubeRestrict", 2)
             }
             dpm.setApplicationRestrictions(admin, PKG_CHROME, bundle)
             Log.i(TAG, "Políticas aplicadas a Chrome.")
@@ -66,20 +76,38 @@ object MdmPolicyManager {
         for (pkg in OPERA_PACKAGES) {
             try {
                 val bundle = Bundle().apply {
-                    // Desactivación de VPN y proxies propietarios
                     putBoolean("VPNEnabled", false)
                     putString("VPNEnabled", "false")
-
-                    // Directiva Chromium base: Forzar conexión directa sin proxies
                     putString("ProxyMode", "direct")
                     putString("DnsOverHttpsMode", "off")
-
-                    // Desactivar pestañas privadas
                     putInt("IncognitoModeAvailability", 1)
                 }
-
                 dpm.setApplicationRestrictions(admin, pkg, bundle)
-                Log.i(TAG, "Políticas aplicadas exitosamente a $pkg")
+                Log.i(TAG, "Políticas aplicadas a $pkg")
+            } catch (e: Exception) {
+                Log.e(TAG, "Error inyectando políticas a $pkg", e)
+            }
+        }
+    }
+
+    private fun applyBraveRestrictions(dpm: DevicePolicyManager, admin: ComponentName) {
+        for (pkg in BRAVE_PACKAGES) {
+            try {
+                val bundle = Bundle().apply {
+                    // 1. Forzar SafeSearch estricto en Google
+                    putBoolean("ForceGoogleSafeSearch", true)
+
+                    // 2. Forzar modo restringido estricto en YouTube (2 = Strict, 1 = Moderate, 0 = Off)
+                    putInt("ForceYouTubeRestrict", 2)
+
+                    // 3. Desactivar DNS sobre HTTPS (DoH) para forzar el uso del túnel VPN puerto 53
+                    putString("DnsOverHttpsMode", "off")
+
+                    // 4. Desactivar modo incógnito/privado
+                    putInt("IncognitoModeAvailability", 1)
+                }
+                dpm.setApplicationRestrictions(admin, pkg, bundle)
+                Log.i(TAG, "Políticas MDM aplicadas con éxito a Brave Browser ($pkg).")
             } catch (e: Exception) {
                 Log.e(TAG, "Error inyectando políticas a $pkg", e)
             }

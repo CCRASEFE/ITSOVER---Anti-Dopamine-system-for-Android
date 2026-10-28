@@ -38,7 +38,7 @@ class DeviceAdminReceiver : android.app.admin.DeviceAdminReceiver() {
 
                     // 2. BLOQUEO DE DESINSTALACIÓN: Tu app + AppBlock
                     dpm.setUninstallBlocked(adminComponent, context.packageName, true)
-                    dpm.setUninstallBlocked(adminComponent, "cz.mobilesoft.appblock", false) // <--- ¡AQUÍ BLINDAS APPBLOCK!
+                    dpm.setUninstallBlocked(adminComponent, "cz.mobilesoft.appblock", true) // <--- ¡AQUÍ BLINDAS APPBLOCK!
 
                     // 3. Blindaje de DNS Privado
                     dpm.setGlobalSetting(adminComponent, "private_dns_mode", "off")
@@ -55,7 +55,11 @@ class DeviceAdminReceiver : android.app.admin.DeviceAdminReceiver() {
                     // 6. Restricciones contra APKs desconocidos
                     AppRestrictionManager.applyAllRestrictions(context, adminComponent)
 
+                    // 7. Inmunización de Hardware de Ubicación y GPS (ADB permanece activo)
+                    LocationSecurityManager.enforceLocationAlwaysOn(context, adminComponent)
+
                     Log.i(TAG, "¡ÉXITO TOTAL! Políticas de Device Owner aplicadas sin errores.")
+
                 } catch (e: Exception) {
                     Log.e(TAG, "Error aplicando directivas de Device Owner", e)
                 }
